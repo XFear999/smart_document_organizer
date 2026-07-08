@@ -76,6 +76,14 @@ Prefer clicking? Launch the GUI:
 python smart_document_organizer.py --gui
 ```
 
+The GUI exposes every CLI option except `--ocr-lang`: source/output folders,
+a "Learn from CSV" picker (same as `--learn-from`), checkboxes for OCR,
+renaming, needs-review handling (move + group by type) and "Reprocess all",
+the duplicate-action dropdown, min-confidence, Dry Run / Apply Copy /
+Apply Move buttons, plus **Find Duplicates** (report only) and
+**Delete Duplicates...** (confirmed, reversible) for the standalone
+duplicate scanner.
+
 ---
 
 ## Example commands

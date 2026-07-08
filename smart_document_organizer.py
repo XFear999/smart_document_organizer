@@ -1991,7 +1991,7 @@ def _human_size(n: float) -> str:
 
 
 def run_duplicate_scan(folder: Path, delete: bool = False,
-                       assume_yes: bool = False) -> int:
+                       assume_yes: bool = False) -> Dict[str, object]:
     """Scan `folder` for exact duplicate files (SHA-256) and optionally
     remove the redundant copies.
 
@@ -2129,7 +2129,15 @@ def run_duplicate_scan(folder: Path, delete: bool = False,
     elif removed_action:
         logger.info("Done. Every removal is reversible (Recycle Bin or "
                     "quarantine folder).")
-    return 0
+    return {
+        "groups": len(groups),
+        "duplicates": len(dupes),
+        "wasted": wasted,
+        "report": report,
+        "results": results,
+        "removed": bool(removed_action),
+        "errors": errors,
+    }
 
 
 def run_cli(args: argparse.Namespace) -> int:
@@ -2145,9 +2153,10 @@ def run_cli(args: argparse.Namespace) -> int:
 
     # Standalone duplicate-finder mode: no classification, no organizing.
     if args.find_duplicates or args.delete_duplicates:
-        return run_duplicate_scan(opt.folder,
-                                  delete=args.delete_duplicates,
-                                  assume_yes=args.yes)
+        run_duplicate_scan(opt.folder,
+                           delete=args.delete_duplicates,
+                           assume_yes=args.yes)
+        return 0
 
     # Loud, explicit banner about what mode we're in so nothing is a surprise.
     op = "COPY" if opt.copy else "MOVE"
@@ -2201,6 +2210,8 @@ def launch_gui() -> int:
     rename_var = tk.BooleanVar(value=False)
     review_var = tk.BooleanVar(value=False)
     bytype_var = tk.BooleanVar(value=False)
+    reproc_var = tk.BooleanVar(value=False)
+    learn_var = tk.StringVar()
 
     def pick_source():
         d = filedialog.askdirectory(title="Select folder to organize")
@@ -2226,8 +2237,21 @@ def launch_gui() -> int:
     ttk.Button(frm, text="Browse...", command=pick_output).grid(row=1,
                                                                 column=2)
 
+    def pick_learn_csv():
+        f = filedialog.askopenfilename(
+            title="Select corrected CSV (with corrected_category filled in)",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")])
+        if f:
+            learn_var.set(f)
+
+    ttk.Label(frm, text="Learn from CSV:").grid(row=2, column=0, sticky="w")
+    ttk.Entry(frm, textvariable=learn_var, width=80).grid(row=2, column=1,
+                                                          sticky="we", padx=5)
+    ttk.Button(frm, text="Browse...", command=pick_learn_csv).grid(row=2,
+                                                                   column=2)
+
     opts = ttk.Frame(frm)
-    opts.grid(row=2, column=0, columnspan=3, sticky="w", pady=(8, 0))
+    opts.grid(row=3, column=0, columnspan=3, sticky="w", pady=(8, 0))
     ttk.Checkbutton(opts, text="OCR images", variable=ocr_var).pack(
         side="left")
     ttk.Checkbutton(opts, text="OCR scanned PDFs", variable=spdf_var).pack(
@@ -2238,6 +2262,8 @@ def launch_gui() -> int:
                     variable=review_var).pack(side="left", padx=(10, 0))
     ttk.Checkbutton(opts, text="Group review by type",
                     variable=bytype_var).pack(side="left", padx=(10, 0))
+    ttk.Checkbutton(opts, text="Reprocess all",
+                    variable=reproc_var).pack(side="left", padx=(10, 0))
     ttk.Label(opts, text="Duplicates:").pack(side="left", padx=(10, 0))
     ttk.Combobox(opts, textvariable=dup_var, width=8, state="readonly",
                  values=["folder", "keep", "skip"]).pack(side="left")
@@ -2291,6 +2317,9 @@ def launch_gui() -> int:
             move_needs_review=review_var.get(),
             review_by_type=bytype_var.get(),
             rename=rename_var.get(),
+            reprocess=reproc_var.get(),
+            learn_from=Path(learn_var.get().strip())
+            if learn_var.get().strip() else None,
         )
 
     def run_worker(opt: Options):
@@ -2321,6 +2350,39 @@ def launch_gui() -> int:
         status_var.set("Working...")
         threading.Thread(target=run_worker, args=(opt,), daemon=True).start()
 
+    # -- standalone duplicate finder / cleaner ------------------------------ #
+    def dup_worker(folder: Path, delete: bool):
+        try:
+            summary = run_duplicate_scan(folder, delete=delete,
+                                         assume_yes=True)
+            ui_queue.put(("dup_done", summary))
+        except Exception as exc:  # noqa: BLE001
+            ui_queue.put(("error", str(exc)))
+
+    def start_dup(delete: bool):
+        src = src_var.get().strip()
+        if not src or not Path(src).is_dir():
+            messagebox.showerror(APP_NAME, "Please choose a valid source "
+                                           "folder.")
+            return
+        if delete:
+            if not messagebox.askyesno(
+                APP_NAME,
+                "This will scan for exact duplicate files and remove the "
+                "redundant copies (one copy of each is always kept; "
+                "organized copies are preferred).\n\n"
+                "Removed files go to the Recycle Bin (or a "
+                "_Duplicates_Trash folder) and can be restored.\n\n"
+                "Continue?"
+            ):
+                return
+        for item in tree.get_children():
+            tree.delete(item)
+        prog["value"] = 0
+        status_var.set("Scanning for duplicates...")
+        threading.Thread(target=dup_worker, args=(Path(src), delete),
+                         daemon=True).start()
+
     def poll_queue():
         try:
             while True:
@@ -2344,6 +2406,22 @@ def launch_gui() -> int:
                         f"Done. {len(records)} file(s). Log: "
                         f"{Path(output) / LOG_CSV_NAME}"
                     )
+                elif kind == "dup_done":
+                    s = payload
+                    for sha, extra, keeper, action in s["results"]:
+                        tree.insert("", "end", values=(
+                            str(extra), "(exact duplicate)", "",
+                            "duplicate", action,
+                        ))
+                    msg = (f"{s['groups']} duplicate group(s), "
+                           f"{s['duplicates']} redundant file(s), "
+                           f"{_human_size(s['wasted'])}"
+                           f"{' removed' if s['removed'] else ' found'}.")
+                    status_var.set(f"Done. {msg} Report: {s['report']}")
+                    if messagebox.askyesno(
+                        APP_NAME, f"{msg}\n\nOpen the report CSV?"
+                    ):
+                        _open_in_os(Path(s["report"]))
                 elif kind == "error":
                     status_var.set("Error.")
                     messagebox.showerror(APP_NAME, payload)
@@ -2361,6 +2439,12 @@ def launch_gui() -> int:
         side="left", padx=(8, 0))
     ttk.Button(btns, text="Apply (Move)",
                command=lambda: start(apply=True, copy=False)).pack(
+        side="left", padx=(8, 0))
+    ttk.Button(btns, text="Find Duplicates",
+               command=lambda: start_dup(delete=False)).pack(
+        side="left", padx=(24, 0))
+    ttk.Button(btns, text="Delete Duplicates...",
+               command=lambda: start_dup(delete=True)).pack(
         side="left", padx=(8, 0))
 
     def open_csv():
