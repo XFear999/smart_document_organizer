@@ -118,6 +118,7 @@ python smart_document_organizer.py "C:\Users\me\Downloads" --learn-from "C:\User
 | `--learn-from CSV` | Apply `corrected_category` from a CSV by SHA-256. |
 | `--rename` | Rename to `YYYY-MM-DD - Category - Party - Hint.ext`. |
 | `--reprocess` | Ignore the persistent history and process everything again. |
+| `--review-by-type` | Group `_Needs_Review` into subfolders by file type (`PDF`, `MP3`, `ZIP`, ...). Use with `--move-needs-review`. |
 | `--ocr-lang` | Tesseract language(s), e.g. `eng` or `eng+ara`. |
 | `--gui` | Launch the Tkinter GUI. |
 | `--verbose`, `-v` | Verbose logging. |

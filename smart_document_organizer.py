@@ -1502,6 +1502,9 @@ class Options:
     duplicate_action: str = "folder"   # keep | folder | skip
     min_confidence: float = 0.45
     move_needs_review: bool = False
+    # Inside _Needs_Review, group files into subfolders by their file type
+    # (extension), e.g. _Needs_Review/PDF, _Needs_Review/MP3, _Needs_Review/ZIP.
+    review_by_type: bool = False
     rename: bool = False
     learn_from: Optional[Path] = None
     ocr_lang: str = "eng"
@@ -1750,6 +1753,11 @@ class Organizer:
         elif category in ("Invoices", "Receipts", "Utilities") \
                 and rec.detected_party:
             dest = dest / sanitize_filename(rec.detected_party)
+        # Optionally group needs-review files by file type so they're easy
+        # to triage later: _Needs_Review/PDF, _Needs_Review/MP3, ...
+        elif category == CAT_NEEDS_REVIEW and self.opt.review_by_type:
+            ext = Path(rec.original_name).suffix.lstrip(".").upper()
+            dest = dest / sanitize_filename(ext or "No Extension")
         return dest
 
     def _finalize_destination(self, path: Path, rec: Record,
@@ -1912,6 +1920,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="Ignore the persistent history and process every "
                         "file again, even content organized by a previous "
                         "run (may create ' (2)' copies in the output).")
+    p.add_argument("--review-by-type", action="store_true",
+                   help="Group files inside _Needs_Review into subfolders "
+                        "by file type, e.g. _Needs_Review\\PDF, "
+                        "_Needs_Review\\MP3, _Needs_Review\\ZIP. "
+                        "Use together with --move-needs-review.")
     p.add_argument("--gui", action="store_true",
                    help="Launch the Tkinter graphical interface.")
     p.add_argument("--verbose", "-v", action="store_true",
@@ -1937,6 +1950,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         duplicate_action=args.duplicate_action,
         min_confidence=args.min_confidence,
         move_needs_review=args.move_needs_review,
+        review_by_type=args.review_by_type,
         rename=args.rename,
         learn_from=Path(args.learn_from).expanduser() if args.learn_from
         else None,
@@ -2007,6 +2021,7 @@ def launch_gui() -> int:
     spdf_var = tk.BooleanVar(value=False)
     rename_var = tk.BooleanVar(value=True)
     review_var = tk.BooleanVar(value=False)
+    bytype_var = tk.BooleanVar(value=False)
 
     def pick_source():
         d = filedialog.askdirectory(title="Select folder to organize")
@@ -2042,6 +2057,8 @@ def launch_gui() -> int:
         side="left", padx=(10, 0))
     ttk.Checkbutton(opts, text="Move Needs-Review too",
                     variable=review_var).pack(side="left", padx=(10, 0))
+    ttk.Checkbutton(opts, text="Group review by type",
+                    variable=bytype_var).pack(side="left", padx=(10, 0))
     ttk.Label(opts, text="Duplicates:").pack(side="left", padx=(10, 0))
     ttk.Combobox(opts, textvariable=dup_var, width=8, state="readonly",
                  values=["folder", "keep", "skip"]).pack(side="left")
@@ -2093,6 +2110,7 @@ def launch_gui() -> int:
             duplicate_action=dup_var.get(),
             min_confidence=float(conf_var.get()),
             move_needs_review=review_var.get(),
+            review_by_type=bytype_var.get(),
             rename=rename_var.get(),
         )
 
