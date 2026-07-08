@@ -119,6 +119,9 @@ python smart_document_organizer.py "C:\Users\me\Downloads" --learn-from "C:\User
 | `--rename` | Rename to `YYYY-MM-DD - Category - Party - Hint.ext`. |
 | `--reprocess` | Ignore the persistent history and process everything again. |
 | `--review-by-type` | Group `_Needs_Review` into subfolders by file type (`PDF`, `MP3`, `ZIP`, ...). Use with `--move-needs-review`. |
+| `--find-duplicates` | Standalone mode: scan for exact duplicates and write `duplicates_report.csv`. Report only. |
+| `--delete-duplicates` | Same scan, then removes redundant copies (Recycle Bin / quarantine — reversible). Asks for confirmation. |
+| `--yes` | Skip the `--delete-duplicates` confirmation prompt. |
 | `--ocr-lang` | Tesseract language(s), e.g. `eng` or `eng+ara`. |
 | `--gui` | Launch the Tkinter GUI. |
 | `--verbose`, `-v` | Verbose logging. |
@@ -206,6 +209,37 @@ Organized_Documents/
 
 The `duplicate_group` column is the first 12 hex chars of the SHA-256, so every
 copy of the same content shares a group id.
+
+### Standalone duplicate finder & cleaner
+
+Separate from organizing, you can scan any folder for exact duplicates:
+
+```powershell
+# Report only — nothing is touched, writes duplicates_report.csv
+python smart_document_organizer.py "C:\Users\basse\Downloads" --find-duplicates
+
+# Remove redundant copies (asks you to type DELETE to confirm)
+python smart_document_organizer.py "C:\Users\basse\Downloads" --delete-duplicates
+```
+
+How it differs from the organizer's normal duplicate handling:
+
+- **Everything** is scanned — every file type, and any `Organized_Documents`
+  tree inside the folder is *included*, so leftovers in your Downloads are
+  matched against their already-organized twins.
+- One **keeper** per duplicate group is chosen and never touched. Preference:
+  a copy inside `Organized_Documents` first, then the oldest file, then the
+  shortest path.
+- With `--delete-duplicates`, redundant copies go to the **Recycle Bin**
+  (needs `pip install Send2Trash`). Without Send2Trash they are moved to a
+  `_Duplicates_Trash` quarantine folder instead. **Nothing is ever
+  permanently deleted** — every removal can be undone.
+- `duplicates_report.csv` lists every duplicate, which original was kept,
+  and what action was taken.
+
+Typical Downloads cleanup: organize with `--apply --copy`, verify the output
+looks right, then run `--delete-duplicates` on Downloads to clear out the
+leftovers whose organized twins already exist.
 
 ### Re-running on the same folders (incremental runs)
 

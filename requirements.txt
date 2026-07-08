@@ -36,6 +36,12 @@ extract-msg>=0.48.0       # Outlook .msg emails
 #   * Poppler       -> https://github.com/oschwartz10612/poppler-windows
 #     (unzip and add its Library\bin folder to PATH)
 #
+# ----- Duplicate cleanup (--delete-duplicates) -----------------------------
+# Sends removed duplicates to the Windows Recycle Bin so they can always be
+# restored. Without it, duplicates are moved to a _Duplicates_Trash folder
+# instead (still reversible, just not via the Recycle Bin).
+Send2Trash>=1.8.2
+
 pytesseract>=0.3.10       # Python wrapper around the Tesseract engine
 Pillow>=10.0.0            # Image loading for OCR (JPG/PNG/TIFF/WEBP)
 pdf2image>=1.17.0         # Rasterizes scanned PDFs so they can be OCR'd

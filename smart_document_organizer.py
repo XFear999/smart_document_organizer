@@ -1925,6 +1925,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "by file type, e.g. _Needs_Review\\PDF, "
                         "_Needs_Review\\MP3, _Needs_Review\\ZIP. "
                         "Use together with --move-needs-review.")
+    p.add_argument("--find-duplicates", action="store_true",
+                   help="Standalone mode: scan the folder (INCLUDING any "
+                        "Organized_Documents inside it) for exact duplicate "
+                        "files and write duplicates_report.csv. Report only "
+                        "— nothing is touched.")
+    p.add_argument("--delete-duplicates", action="store_true",
+                   help="Like --find-duplicates, but also removes the "
+                        "redundant copies after confirmation. One copy per "
+                        "group is always kept (organized copies preferred). "
+                        "Removed files go to the Recycle Bin (Send2Trash) "
+                        "or a _Duplicates_Trash quarantine folder — never "
+                        "permanently deleted.")
+    p.add_argument("--yes", action="store_true",
+                   help="Skip the confirmation prompt of "
+                        "--delete-duplicates.")
     p.add_argument("--gui", action="store_true",
                    help="Launch the Tkinter graphical interface.")
     p.add_argument("--verbose", "-v", action="store_true",
@@ -1959,6 +1974,164 @@ def options_from_args(args: argparse.Namespace) -> Options:
     )
 
 
+# --------------------------------------------------------------------------- #
+# Standalone duplicate finder / cleaner (--find-duplicates / --delete-duplicates)
+# --------------------------------------------------------------------------- #
+
+DUP_REPORT_NAME = "duplicates_report.csv"
+TRASH_DIRNAME = "_Duplicates_Trash"   # quarantine used when Send2Trash missing
+
+
+def _human_size(n: float) -> str:
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024 or unit == "TB":
+            return f"{n:,.0f} {unit}" if unit == "B" else f"{n:,.1f} {unit}"
+        n /= 1024
+    return f"{n:,.1f} TB"
+
+
+def run_duplicate_scan(folder: Path, delete: bool = False,
+                       assume_yes: bool = False) -> int:
+    """Scan `folder` for exact duplicate files (SHA-256) and optionally
+    remove the redundant copies.
+
+    Differences from the organizer's normal duplicate handling:
+      * EVERY file is scanned — all extensions, and the Organized_Documents
+        tree is INCLUDED, so copies still sitting in the source can be
+        matched against their already-organized twins.
+      * One "keeper" per group is chosen and never touched. Preference:
+        a copy inside Organized_Documents first, then the oldest file,
+        then the shortest path.
+      * With `delete=True`, redundant copies go to the RECYCLE BIN
+        (Send2Trash). If Send2Trash isn't installed they are moved to a
+        _Duplicates_Trash quarantine folder instead. Nothing is ever
+        permanently deleted, so every removal is reversible.
+    """
+    # -- collect files ------------------------------------------------------ #
+    files: List[Path] = []
+    for root, dirs, fnames in os.walk(folder):
+        root_path = Path(root)
+        dirs[:] = [d for d in dirs
+                   if d.lower() not in SKIP_DIR_NAMES and d != TRASH_DIRNAME]
+        for fname in fnames:
+            # Skip our own bookkeeping files — they change every run.
+            if fname in (LOG_CSV_NAME, DB_NAME, DUP_REPORT_NAME):
+                continue
+            files.append(root_path / fname)
+
+    logger.info("Hashing %d file(s) under %s ...", len(files), folder)
+    by_hash: Dict[str, List[Path]] = {}
+    errors = 0
+    for i, p in enumerate(files, start=1):
+        try:
+            if p.stat().st_size == 0:
+                continue  # all empty files are trivially "identical" — skip
+            by_hash.setdefault(sha256_of_file(p), []).append(p)
+        except Exception as exc:  # noqa: BLE001
+            errors += 1
+            logger.warning("Could not hash %s: %s", p, exc)
+        if i % 200 == 0:
+            logger.info("  ... %d / %d hashed", i, len(files))
+
+    groups = {h: ps for h, ps in by_hash.items() if len(ps) > 1}
+
+    # -- pick the keeper of each group -------------------------------------- #
+    def keeper_rank(p: Path) -> Tuple[int, float, int]:
+        in_organized = DEFAULT_OUTPUT_DIRNAME in p.parts
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            mtime = float("inf")
+        return (0 if in_organized else 1, mtime, len(str(p)))
+
+    dupes: List[Tuple[str, Path, Path]] = []  # (sha, duplicate, keeper)
+    wasted = 0
+    for sha, paths in groups.items():
+        ordered = sorted(paths, key=keeper_rank)
+        keeper = ordered[0]
+        for extra in ordered[1:]:
+            dupes.append((sha, extra, keeper))
+            try:
+                wasted += extra.stat().st_size
+            except OSError:
+                pass
+
+    logger.info("Found %d duplicate group(s): %d redundant file(s), "
+                "%s reclaimable.", len(groups), len(dupes),
+                _human_size(wasted))
+
+    # -- confirmation + removal --------------------------------------------- #
+    removed_action = ""
+    if delete and dupes:
+        try:
+            from send2trash import send2trash as _send2trash
+        except ImportError:
+            _send2trash = None
+            logger.warning(
+                "Send2Trash is not installed (pip install Send2Trash). "
+                "Duplicates will be MOVED to the '%s' quarantine folder "
+                "instead of the Recycle Bin.", TRASH_DIRNAME)
+
+        if not assume_yes:
+            print(f"\nAbout to remove {len(dupes)} duplicate file(s) "
+                  f"({_human_size(wasted)}). One copy of each is kept. "
+                  f"Removed files go to the "
+                  f"{'Recycle Bin' if _send2trash else TRASH_DIRNAME + ' folder'}"
+                  f" and can be restored.")
+            answer = input("Type DELETE to confirm, anything else aborts: ")
+            if answer.strip().upper() != "DELETE":
+                logger.info("Aborted. Nothing was removed. The report will "
+                            "still be written.")
+                delete = False
+
+    results: List[Tuple[str, Path, Path, str]] = []
+    if delete and dupes:
+        trash_root = folder / TRASH_DIRNAME
+        for sha, extra, keeper in dupes:
+            try:
+                if _send2trash is not None:
+                    _send2trash(str(extra))
+                    action = "sent to Recycle Bin"
+                else:
+                    dest = unique_destination(trash_root, extra.name)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(extra), str(dest))
+                    action = f"moved to quarantine: {dest}"
+            except Exception as exc:  # noqa: BLE001
+                action = f"ERROR: {exc}"
+                logger.warning("Could not remove %s: %s", extra, exc)
+            results.append((sha, extra, keeper, action))
+        removed_action = "removed"
+    else:
+        results = [(sha, extra, keeper, "found (report only)")
+                   for sha, extra, keeper in dupes]
+
+    # -- report -------------------------------------------------------------- #
+    report = folder / DUP_REPORT_NAME
+    with open(report, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        w.writerow(["duplicate_group", "sha256", "duplicate_file",
+                    "size", "kept_original", "action"])
+        for sha, extra, keeper, action in results:
+            try:
+                size = extra.stat().st_size
+            except OSError:
+                size = ""
+            w.writerow([sha[:12], sha, str(extra), size, str(keeper), action])
+
+    logger.info("Report written: %s", report)
+    if errors:
+        logger.info("%d file(s) could not be read (see warnings above).",
+                    errors)
+    if not delete and dupes:
+        logger.info("Nothing was removed (report-only mode). To remove the "
+                    "redundant copies, re-run with --delete-duplicates.")
+    elif removed_action:
+        logger.info("Done. Every removal is reversible (Recycle Bin or "
+                    "quarantine folder).")
+    return 0
+
+
 def run_cli(args: argparse.Namespace) -> int:
     if not args.folder:
         logger.error("No source folder given. Pass a folder or use --gui. "
@@ -1969,6 +2142,12 @@ def run_cli(args: argparse.Namespace) -> int:
         logger.error("Source folder does not exist or is not a directory: %s",
                      opt.folder)
         return 2
+
+    # Standalone duplicate-finder mode: no classification, no organizing.
+    if args.find_duplicates or args.delete_duplicates:
+        return run_duplicate_scan(opt.folder,
+                                  delete=args.delete_duplicates,
+                                  assume_yes=args.yes)
 
     # Loud, explicit banner about what mode we're in so nothing is a surprise.
     op = "COPY" if opt.copy else "MOVE"
@@ -2019,7 +2198,7 @@ def launch_gui() -> int:
     conf_var = tk.DoubleVar(value=0.45)
     ocr_var = tk.BooleanVar(value=False)
     spdf_var = tk.BooleanVar(value=False)
-    rename_var = tk.BooleanVar(value=True)
+    rename_var = tk.BooleanVar(value=False)
     review_var = tk.BooleanVar(value=False)
     bytype_var = tk.BooleanVar(value=False)
 
