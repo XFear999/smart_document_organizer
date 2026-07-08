@@ -102,6 +102,7 @@ python smart_document_organizer.py "C:\Users\me\Downloads" --learn-from "C:\User
 | `--move-needs-review` | Also copy/move low-confidence files into `_Needs_Review`. |
 | `--learn-from CSV` | Apply `corrected_category` from a CSV by SHA-256. |
 | `--rename` | Rename to `YYYY-MM-DD - Category - Party - Hint.ext`. |
+| `--reprocess` | Ignore the persistent history and process everything again. |
 | `--ocr-lang` | Tesseract language(s), e.g. `eng` or `eng+ara`. |
 | `--gui` | Launch the Tkinter GUI. |
 | `--verbose`, `-v` | Verbose logging. |
@@ -189,6 +190,26 @@ Organized_Documents/
 
 The `duplicate_group` column is the first 12 hex chars of the SHA-256, so every
 copy of the same content shares a group id.
+
+### Re-running on the same folders (incremental runs)
+
+The database keeps a **persistent `history` table**: one row per unique content
+hash ever organized by an `--apply` run into this output folder. On every run
+that history is loaded first, which means:
+
+- **Re-running after adding new files works incrementally.** Files already
+  organized (even if they're still sitting in your Downloads because you used
+  copy mode) are recognized by hash and **skipped** — no ` (2)` copies pile up
+  in the output. Only genuinely new content is copied/moved.
+- **New duplicates of old files are caught.** If you download the same
+  bank statement again next month under a different name, its hash matches the
+  history and it's logged as `already organized`, pointing at where the
+  original went (`duplicate_of`).
+- Dry-runs use the history for accurate previews but never write to it.
+- Want to force everything through again anyway? Pass `--reprocess`.
+- The history lives in `organizer.db` inside the output folder, so each output
+  folder has its own memory. Deleting the output folder resets it (which is
+  correct — the files are gone, so re-copying is appropriate).
 
 ---
 

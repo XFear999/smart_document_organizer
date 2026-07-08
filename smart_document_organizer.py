@@ -64,7 +64,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 # --------------------------------------------------------------------------- #
 
 APP_NAME = "Smart Document Organizer"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 
 # Files that live in the organizer's own bookkeeping. We never move these.
 LOG_CSV_NAME = "organizer_log.csv"
@@ -1395,7 +1395,47 @@ class Store:
         self._conn.execute(f"CREATE TABLE IF NOT EXISTS files ({cols})")
         # Fresh run: clear previous rows so the DB mirrors this run's CSV.
         self._conn.execute("DELETE FROM files")
+        # PERSISTENT history: one row per unique content hash ever organized
+        # by an --apply run into this output folder. This table is NEVER
+        # wiped, which is what gives us duplicate detection ACROSS runs
+        # (re-running on the same source won't re-copy files, and new files
+        # that duplicate already-organized content are flagged).
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS history ("
+            "  sha256 TEXT PRIMARY KEY,"
+            "  original_path TEXT,"
+            "  new_path TEXT,"
+            "  category TEXT,"
+            "  organized_at TEXT"
+            ")"
+        )
         self._conn.commit()
+
+    def load_history(self) -> Dict[str, Dict[str, str]]:
+        """Return ``{sha256: {original_path, new_path, category}}`` for every
+        file organized by a previous --apply run into this output folder."""
+        if self._conn is None:
+            return {}
+        rows = self._conn.execute(
+            "SELECT sha256, original_path, new_path, category FROM history"
+        ).fetchall()
+        return {
+            r[0]: {"original_path": r[1], "new_path": r[2], "category": r[3]}
+            for r in rows
+        }
+
+    def record_history(self, rec: "Record") -> None:
+        """Remember that this content hash has been organized (apply runs
+        only), so future runs can skip it instead of duplicating output."""
+        if self._conn is None:
+            return
+        self._conn.execute(
+            "INSERT OR REPLACE INTO history "
+            "(sha256, original_path, new_path, category, organized_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (rec.sha256, rec.original_path, rec.new_path, rec.category,
+             datetime.now().isoformat(timespec="seconds")),
+        )
 
     def write(self, record: Record) -> None:
         row = record.as_row()
@@ -1465,6 +1505,8 @@ class Options:
     rename: bool = False
     learn_from: Optional[Path] = None
     ocr_lang: str = "eng"
+    # Ignore the persistent history and process everything again.
+    reprocess: bool = False
 
 
 class Organizer:
@@ -1488,8 +1530,12 @@ class Organizer:
             corrections=corrections,
         )
         self.store = Store(options.output)
-        # sha256 -> Record of the FIRST (original) file we saw with that hash.
+        # sha256 -> Record of the FIRST (original) file we saw with that hash
+        # in THIS run.
         self._seen_hashes: Dict[str, Record] = {}
+        # sha256 -> info for content organized by PREVIOUS --apply runs into
+        # this same output folder (loaded from the DB's history table).
+        self._prior_hashes: Dict[str, Dict[str, str]] = {}
         self.records: List[Record] = []
         self._output_resolved = options.output.resolve()
 
@@ -1532,6 +1578,15 @@ class Organizer:
     def run(self) -> List[Record]:
         self.store.open()
         try:
+            # Load cross-run memory unless the user asked to reprocess all.
+            if not self.opt.reprocess:
+                self._prior_hashes = self.store.load_history()
+                if self._prior_hashes:
+                    logger.info(
+                        "Loaded %d previously organized file hash(es) from "
+                        "the database (use --reprocess to ignore).",
+                        len(self._prior_hashes),
+                    )
             files = self._iter_files()
             total = len(files)
             logger.info("Scanning %d file(s) under %s", total, self.opt.folder)
@@ -1539,6 +1594,9 @@ class Organizer:
                 record = self._process_file(path)
                 self.records.append(record)
                 self.store.write(record)
+                # Remember successfully organized content for future runs.
+                if self.opt.apply and record.status in ("copied", "moved"):
+                    self.store.record_history(record)
                 if self.progress:
                     try:
                         self.progress(i, total, record)
@@ -1568,6 +1626,22 @@ class Organizer:
             return rec
 
         rec.duplicate_group = rec.sha256[:12]
+
+        # -- cross-run duplicate check (persistent history) ------------------ #
+        # If this exact content was already organized by a previous --apply
+        # run into this output folder, don't copy/move it again: log it as
+        # already organized. This makes re-runs incremental and prevents
+        # " (2)" copies from piling up in the output tree.
+        if rec.sha256 in self._prior_hashes:
+            prior = self._prior_hashes[rec.sha256]
+            rec.category = prior.get("category") or CAT_DUPLICATE
+            rec.duplicate_status = "already organized"
+            rec.duplicate_of = prior.get("new_path") or \
+                prior.get("original_path") or ""
+            rec.reason = ("Identical content was already organized in a "
+                          "previous run (SHA-256 match in history).")
+            rec.status = "skipped (already organized in a previous run)"
+            return rec
 
         ext = path.suffix.lower()
         if ext not in SUPPORTED_EXTENSIONS:
@@ -1827,6 +1901,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "'YYYY-MM-DD - Category - Party - Hint.ext'.")
     p.add_argument("--ocr-lang", default="eng",
                    help="Tesseract language(s), e.g. 'eng' or 'eng+ara'.")
+    p.add_argument("--reprocess", action="store_true",
+                   help="Ignore the persistent history and process every "
+                        "file again, even content organized by a previous "
+                        "run (may create ' (2)' copies in the output).")
     p.add_argument("--gui", action="store_true",
                    help="Launch the Tkinter graphical interface.")
     p.add_argument("--verbose", "-v", action="store_true",
@@ -1856,6 +1934,7 @@ def options_from_args(args: argparse.Namespace) -> Options:
         learn_from=Path(args.learn_from).expanduser() if args.learn_from
         else None,
         ocr_lang=args.ocr_lang,
+        reprocess=args.reprocess,
     )
 
 
