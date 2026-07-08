@@ -1,0 +1,30 @@
+# Smart Document Organizer - Python dependencies
+#
+# The application degrades gracefully: if a library below is missing, only the
+# feature that needs it is disabled and everything else keeps working. Install
+# what you need for the file types you actually have.
+#
+# ----- Core document extraction -------------------------------------------
+pdfplumber>=0.11.0        # Primary PDF text extraction
+PyPDF2>=3.0.0             # Fallback PDF text extraction
+python-docx>=1.1.0        # Word .docx
+openpyxl>=3.1.0           # Excel .xlsx
+xlrd>=2.0.1               # Legacy Excel .xls
+extract-msg>=0.48.0       # Outlook .msg emails
+#
+# ----- OCR (scanned PDFs + images) ----------------------------------------
+# These Python packages ALSO require system software installed separately:
+#   * Tesseract OCR engine  -> https://github.com/UB-Mannheim/tesseract/wiki
+#   * Poppler (for pdf2image) -> https://github.com/oschwartz10612/poppler-windows
+pytesseract>=0.3.10       # Python wrapper around the Tesseract engine
+Pillow>=10.0.0            # Image loading for OCR (JPG/PNG/TIFF/WEBP)
+pdf2image>=1.17.0         # Rasterizes scanned PDFs so they can be OCR'd
+#
+# ----- Notes ---------------------------------------------------------------
+# * Tkinter (the GUI) ships with the standard python.org Windows installer;
+#   no pip install is required.
+# * sqlite3, csv, hashlib, email, zipfile are all in the Python standard
+#   library - nothing to install.
+# * Legacy binary .doc support (optional) needs 'textract' + 'antiword',
+#   which are awkward on Windows; .doc files are otherwise sent to Needs
+#   Review. Convert .doc to .docx for best results.
