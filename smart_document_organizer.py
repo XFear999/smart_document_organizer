@@ -1657,7 +1657,12 @@ class Organizer:
         rec.duplicate_status = self._dedupe_status(rec)
         if is_duplicate:
             original = self._seen_hashes[rec.sha256]
-            rec.duplicate_of = original.original_path
+            # Link to where the original ENDED UP in the organized tree
+            # (its new_path), falling back to its source path if it wasn't
+            # moved/copied (e.g. needs-review files that were only logged).
+            # Duplicates are always processed after their original, so the
+            # original's destination is already known at this point.
+            rec.duplicate_of = original.new_path or original.original_path
             # Carry the original's classification so logs are coherent.
             rec.category = original.category
             rec.confidence = original.confidence
@@ -1665,7 +1670,9 @@ class Organizer:
             rec.detected_party = original.detected_party
             rec.detected_bank = original.detected_bank
             rec.needs_review = original.needs_review
-            rec.reason = f"Exact duplicate of {original.original_name}."
+            rec.reason = (f"Exact duplicate of {original.original_name} "
+                          f"(original kept at: "
+                          f"{original.new_path or original.original_path}).")
             rec.text_preview = original.text_preview
             self._handle_duplicate(path, rec, original)
             return rec
