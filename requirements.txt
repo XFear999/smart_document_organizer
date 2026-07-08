@@ -13,12 +13,33 @@ xlrd>=2.0.1               # Legacy Excel .xls
 extract-msg>=0.48.0       # Outlook .msg emails
 #
 # ----- OCR (scanned PDFs + images) ----------------------------------------
-# These Python packages ALSO require system software installed separately:
-#   * Tesseract OCR engine  -> https://github.com/UB-Mannheim/tesseract/wiki
-#   * Poppler (for pdf2image) -> https://github.com/oschwartz10612/poppler-windows
+# IMPORTANT: pip alone is NOT enough for OCR!
+#
+# The packages below are only Python wrappers. The actual OCR engine is a
+# separate Windows program that must be installed once, or you will see:
+#   "WARNING Tesseract OCR failed (is the Tesseract engine installed and
+#    on PATH?)"
+# and all images / scanned PDFs will go to _Needs_Review unclassified.
+#
+# Install the system software with winget (built into Windows 11), then
+# OPEN A NEW TERMINAL so the updated PATH takes effect:
+#
+#   winget install UB-Mannheim.TesseractOCR     <- required for --use-ocr
+#   winget install oschwartz10612.Poppler       <- required for --scanned-pdf-ocr
+#
+# Verify with:  tesseract --version
+#
+# Manual installers (if you prefer):
+#   * Tesseract OCR -> https://github.com/UB-Mannheim/tesseract/wiki
+#     (during install, enable "add to PATH", or add
+#      C:\Program Files\Tesseract-OCR to PATH yourself)
+#   * Poppler       -> https://github.com/oschwartz10612/poppler-windows
+#     (unzip and add its Library\bin folder to PATH)
+#
 pytesseract>=0.3.10       # Python wrapper around the Tesseract engine
 Pillow>=10.0.0            # Image loading for OCR (JPG/PNG/TIFF/WEBP)
 pdf2image>=1.17.0         # Rasterizes scanned PDFs so they can be OCR'd
+                          # (needs Poppler, see above)
 #
 # ----- Notes ---------------------------------------------------------------
 # * Tkinter (the GUI) ships with the standard python.org Windows installer;

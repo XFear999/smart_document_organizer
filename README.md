@@ -31,14 +31,29 @@ anything and never overwrites.
    pip install -r requirements.txt
    ```
 
-3. **(Optional) For OCR** of scanned PDFs and images, install two pieces of
-   system software and make sure they're on your `PATH`:
+3. **(Optional) For OCR** of scanned PDFs and images, two pieces of *system*
+   software are needed (pip alone is not enough — `pytesseract` is only a
+   wrapper). Easiest way, using winget (built into Windows 11):
+
+   ```powershell
+   winget install UB-Mannheim.TesseractOCR     # required for --use-ocr
+   winget install oschwartz10612.Poppler       # required for --scanned-pdf-ocr
+   ```
+
+   Then **open a new terminal** (so PATH updates take effect) and verify:
+   ```powershell
+   tesseract --version
+   ```
+
+   Manual installers, if you prefer:
    - **Tesseract OCR** — https://github.com/UB-Mannheim/tesseract/wiki
-   - **Poppler** (needed to rasterize scanned PDFs) —
-     https://github.com/oschwartz10612/poppler-windows
+     (enable "add to PATH" during install)
+   - **Poppler** — https://github.com/oschwartz10612/poppler-windows
+     (unzip and add its `Library\bin` folder to PATH)
 
    Without these, the app still runs — it just can't read text out of scanned
-   images/PDFs and will route those files to `_Needs_Review`.
+   images/PDFs and will route those files to `_Needs_Review` with a warning
+   like `Tesseract OCR failed (is the Tesseract engine installed...)`.
 
 ---
 
